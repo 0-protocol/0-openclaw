@@ -1,0 +1,164 @@
+# Discord Message Processing Graph
+#
+# This graph processes incoming Discord messages and slash commands.
+# Handles guild-specific permissions and Discord-specific features.
+#
+# Graph Format: 0-lang DSL (interpreted by 0-openclaw runtime)
+
+Graph {
+    name: "discord_processor",
+    version: 1,
+    description: "Processes Discord-specific message features",
+    
+    nodes: [
+        # Entry point: raw message input
+        { 
+            id: "input", 
+            type: External, 
+            uri: "input://message",
+            outputs: ["content", "sender_id", "metadata"]
+        },
+        
+        # Check if this is a slash command
+        {
+            id: "is_slash_command",
+            type: Operation,
+            op: JsonGet,
+            inputs: ["input.metadata", "type"],
+            outputs: ["value"]
+        },
+        
+        {
+            id: "check_slash",
+            type: Operation,
+            op: Eq,
+            inputs: ["is_slash_command.value", "slash_command"],
+            outputs: ["bool"]
+        },
+        
+        # Branch based on message type
+        {
+            id: "type_branch",
+            type: Branch,
+            condition: "check_slash.bool",
+            true_branch: "process_slash_command",
+            false_branch: "process_text_message"
+        },
+        
+        # Process slash commands
+        {
+            id: "process_slash_command",
+            type: Operation,
+            op: JsonGet,
+            inputs: ["input.metadata", "command"],
+            outputs: ["command_name"]
+        },
+        
+        # Check guild allowlist
+        {
+            id: "get_guild_id",
+            type: Operation,
+            op: JsonGet,
+            inputs: ["input.metadata", "guild_id"],
+            outputs: ["guild_id"]
+        },
+        
+        {
+            id: "guild_permission",
+            type: Permission,
+            subject: "get_guild_id.guild_id",
+            action: "guild_access",
+            threshold: 0.5,
+            fallback: "guild_deny"
+        },
+        
+        # Process regular text messages
+        {
+            id: "process_text_message",
+            type: Operation,
+            op: Trim,
+            inputs: ["input.content"],
+            outputs: ["normalized"]
+        },
+        
+        # Check if bot was mentioned
+        {
+            id: "check_mention",
+            type: Operation,
+            op: Contains,
+            inputs: ["input.content", "@"],
+            outputs: ["bool"]
+        },
+        
+        # User permission check
+        {
+            id: "user_permission",
+            type: Permission,
+            subject: "input.sender_id",
+            action: "send_message",
+            threshold: 0.6,
+            fallback: "user_deny"
+        },
+        
+        # Rate limiting per user
+        {
+            id: "rate_limit",
+            type: RateLimit,
+            key: "input.sender_id",
+            limit: 50,
+            window_seconds: 60,
+            fallback: "rate_limit_response"
+        },
+        
+        # Guild deny response
+        {
+            id: "guild_deny",
+            type: Constant,
+            value: {
+                action: "NoOp",
+                reason: "Guild not in allowlist"
+            }
+        },
+        
+        # User deny response
+        {
+            id: "user_deny",
+            type: Constant,
+            value: {
+                action: "SendMessage",
+                content: "You don't have permission to use this bot."
+            }
+        },
+        
+        # Rate limit response
+        {
+            id: "rate_limit_response",
+            type: Constant,
+            value: {
+                action: "SendMessage",
+                content: "You're being rate limited. Please wait."
+            }
+        },
+        
+        # Output aggregation
+        {
+            id: "output",
+            type: Aggregate,
+            inputs: [
+                "type_branch",
+                "guild_permission",
+                "user_permission",
+                "rate_limit"
+            ],
+            outputs: ["processed_message"]
+        }
+    ],
+    
+    outputs: ["output.processed_message"],
+    
+    metadata: {
+        author: "Agent #8",
+        created: "2024-01-01",
+        channel: "discord"
+    }
+}

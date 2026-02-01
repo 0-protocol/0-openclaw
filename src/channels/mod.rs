@@ -7,9 +7,27 @@
 //!
 //! | Channel  | Status      | Feature Flag |
 //! |----------|-------------|--------------|
-//! | Telegram | Pending     | `telegram`   |
-//! | Discord  | Pending     | `discord`    |
-//! | Slack    | Pending     | -            |
+//! | Telegram | Implemented | `telegram`   |
+//! | Discord  | Implemented | `discord`    |
+//! | Slack    | Implemented | -            |
+//!
+//! ## Usage
+//!
+//! ```rust,ignore
+//! use zero_openclaw::channels::{Channel, telegram::TelegramChannel, TelegramConfig};
+//!
+//! let config = TelegramConfig::new("your_bot_token")
+//!     .with_dm_policy(DmPolicy::Allowlist)
+//!     .with_allowlist(vec!["123456789".to_string()]);
+//!
+//! let channel = TelegramChannel::new(config).await?;
+//!
+//! // Receive messages
+//! loop {
+//!     let msg = channel.receive().await?;
+//!     println!("Received: {}", msg.content);
+//! }
+//! ```
 //!
 //! ## Implementation Status
 //!
@@ -20,6 +38,18 @@
 use async_trait::async_trait;
 use crate::types::{Action, Confidence, IncomingMessage, OutgoingMessage, ProofCarryingAction};
 use crate::error::ChannelError;
+
+// Submodules
+pub mod common;
+pub mod telegram;
+pub mod discord;
+pub mod slack;
+
+// Re-export commonly used types
+pub use telegram::{TelegramChannel, TelegramConfig, DmPolicy, GroupPolicy};
+pub use discord::{DiscordChannel, DiscordConfig};
+pub use slack::{SlackChannel, SlackConfig, SlackEvent};
+pub use common::{RateLimiter, RateLimitConfig, RetryPolicy};
 
 /// Channel features that may or may not be supported.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -66,11 +96,6 @@ pub trait Channel: Send + Sync {
     fn supports(&self, feature: ChannelFeature) -> bool;
 }
 
-// Submodules to be implemented by Agent #8
-// pub mod telegram;
-// pub mod discord;
-// pub mod slack;
-
 /// Placeholder channel for testing.
 pub struct TestChannel {
     name: String,
@@ -84,6 +109,12 @@ impl TestChannel {
             name: name.to_string(),
             allowlist: Vec::new(),
         }
+    }
+
+    /// Add users to the allowlist.
+    pub fn with_allowlist(mut self, users: Vec<String>) -> Self {
+        self.allowlist = users;
+        self
     }
 }
 
@@ -111,5 +142,45 @@ impl Channel for TestChannel {
 
     fn supports(&self, _feature: ChannelFeature) -> bool {
         false
+    }
+}
+
+/// Registry for managing multiple channels.
+pub struct ChannelRegistry {
+    channels: std::collections::HashMap<String, Box<dyn Channel>>,
+}
+
+impl ChannelRegistry {
+    /// Create a new empty channel registry.
+    pub fn new() -> Self {
+        Self {
+            channels: std::collections::HashMap::new(),
+        }
+    }
+
+    /// Register a channel.
+    pub fn register<C: Channel + 'static>(&mut self, channel: C) {
+        self.channels.insert(channel.name().to_string(), Box::new(channel));
+    }
+
+    /// Get a channel by name.
+    pub fn get(&self, name: &str) -> Option<&dyn Channel> {
+        self.channels.get(name).map(|c| c.as_ref())
+    }
+
+    /// List all registered channel names.
+    pub fn list(&self) -> Vec<&str> {
+        self.channels.keys().map(|s| s.as_str()).collect()
+    }
+
+    /// Check if a channel is registered.
+    pub fn has(&self, name: &str) -> bool {
+        self.channels.contains_key(name)
+    }
+}
+
+impl Default for ChannelRegistry {
+    fn default() -> Self {
+        Self::new()
     }
 }

@@ -1,0 +1,47 @@
+# Calendar Skill
+#
+# Retrieves and formats calendar events for a given date.
+# Uses internal calendar:// protocol for event access.
+#
+# Inputs:
+#   - date: StringTensor containing date in YYYY-MM-DD format
+#
+# Outputs:
+#   - events: StringTensor containing formatted calendar events
+
+Graph {
+    name: "calendar",
+    version: 1,
+    description: "Retrieves and formats calendar events",
+    
+    nodes: [
+        { id: "date", type: Input, tensor_type: "string" },
+        
+        # Validate and normalize date
+        { id: "validate_date", type: Operation, op: Identity, inputs: ["date"] },
+        
+        # Query calendar API
+        { id: "calendar_api", type: External,
+          uri: "calendar://events",
+          inputs: ["validate_date"]
+        },
+        
+        # Parse the response
+        { id: "parse_events", type: Operation, op: JsonParse, 
+          inputs: ["calendar_api"] 
+        },
+        
+        # Format output
+        { id: "format_events", type: Operation, op: StringFormat,
+          inputs: ["date", "parse_events"],
+          template: "Calendar Events for {}:\n{}"
+        },
+    ],
+    
+    outputs: ["format_events"],
+    
+    proofs: [
+        HaltingProof { max_steps: 50, fuel_budget: 1000 },
+        MemoryBound { max_bytes: 524288 }  # 512KB
+    ]
+}

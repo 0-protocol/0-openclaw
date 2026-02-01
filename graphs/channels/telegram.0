@@ -1,0 +1,139 @@
+# Telegram Message Processing Graph
+#
+# This graph processes incoming Telegram messages before routing to skills.
+# It handles command extraction, permission checking, and message normalization.
+#
+# Graph Format: 0-lang DSL (interpreted by 0-openclaw runtime)
+
+Graph {
+    name: "telegram_processor",
+    version: 1,
+    description: "Processes Telegram-specific message features",
+    
+    # Input node - receives IncomingMessage from channel
+    nodes: [
+        # Entry point: raw message input
+        { 
+            id: "input", 
+            type: External, 
+            uri: "input://message",
+            outputs: ["content", "sender_id", "metadata"]
+        },
+        
+        # Check if message starts with /
+        { 
+            id: "is_command", 
+            type: Operation, 
+            op: StartsWith, 
+            inputs: ["input.content", "/"],
+            outputs: ["bool"]
+        },
+        
+        # Branch based on command detection
+        { 
+            id: "command_branch", 
+            type: Branch, 
+            condition: "is_command.bool",
+            true_branch: "extract_command",
+            false_branch: "normalize_text"
+        },
+        
+        # Extract command name and arguments
+        {
+            id: "extract_command",
+            type: Operation,
+            op: SplitFirst,
+            inputs: ["input.content", " "],
+            outputs: ["command", "args"]
+        },
+        
+        # Handle /start command specially (new user onboarding)
+        {
+            id: "is_start",
+            type: Operation,
+            op: Eq,
+            inputs: ["extract_command.command", "/start"],
+            outputs: ["bool"]
+        },
+        
+        # Handle /help command
+        {
+            id: "is_help",
+            type: Operation,
+            op: Eq,
+            inputs: ["extract_command.command", "/help"],
+            outputs: ["bool"]
+        },
+        
+        # Permission evaluation based on sender
+        { 
+            id: "permission_check", 
+            type: Permission,
+            subject: "input.sender_id",
+            action: "execute_command",
+            threshold: 0.7,
+            fallback: "deny_response"
+        },
+        
+        # Normalize text for non-command messages
+        {
+            id: "normalize_text",
+            type: Operation,
+            op: Trim,
+            inputs: ["input.content"],
+            outputs: ["normalized"]
+        },
+        
+        # Rate limit check
+        {
+            id: "rate_limit",
+            type: RateLimit,
+            key: "input.sender_id",
+            limit: 30,
+            window_seconds: 60,
+            fallback: "rate_limit_response"
+        },
+        
+        # Deny response for permission failures
+        {
+            id: "deny_response",
+            type: Constant,
+            value: {
+                action: "SendMessage",
+                content: "You don't have permission to perform this action."
+            }
+        },
+        
+        # Rate limit response
+        {
+            id: "rate_limit_response",
+            type: Constant,
+            value: {
+                action: "SendMessage",
+                content: "Slow down! You're sending too many messages."
+            }
+        },
+        
+        # Output aggregator
+        { 
+            id: "output", 
+            type: Aggregate,
+            inputs: [
+                "command_branch",
+                "permission_check",
+                "rate_limit"
+            ],
+            outputs: ["processed_message"]
+        }
+    ],
+    
+    # Graph outputs
+    outputs: ["output.processed_message"],
+    
+    # Metadata for verification
+    metadata: {
+        author: "Agent #8",
+        created: "2024-01-01",
+        channel: "telegram"
+    }
+}

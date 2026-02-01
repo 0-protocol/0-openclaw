@@ -74,6 +74,15 @@ pub enum GatewayError {
 
     #[error("Server error: {0}")]
     ServerError(String),
+
+    #[error("Session error: {0}")]
+    SessionError(String),
+}
+
+impl From<SessionError> for GatewayError {
+    fn from(err: SessionError) -> Self {
+        GatewayError::SessionError(err.to_string())
+    }
 }
 
 /// Errors related to Channels.

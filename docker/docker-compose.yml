@@ -1,0 +1,29 @@
+version: '3.8'
+
+services:
+  gateway:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    container_name: zero-openclaw
+    ports:
+      - "18789:18789"
+    volumes:
+      - openclaw-data:/data
+      - ./config.json:/app/config/config.json:ro
+    environment:
+      - RUST_LOG=info
+      - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN:-}
+      - DISCORD_BOT_TOKEN=${DISCORD_BOT_TOKEN:-}
+      - SLACK_BOT_TOKEN=${SLACK_BOT_TOKEN:-}
+      - SLACK_APP_TOKEN=${SLACK_APP_TOKEN:-}
+    restart: unless-stopped
+    networks:
+      - openclaw-network
+
+networks:
+  openclaw-network:
+    driver: bridge
+
+volumes:
+  openclaw-data:

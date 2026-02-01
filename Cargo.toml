@@ -58,10 +58,12 @@ chrono = { version = "0.4", features = ["serde"] }
 thiserror = "1.0"
 anyhow = "1.0"
 hex = "0.4"
+regex = "1.10"
 
 # Channel libraries (optional features)
 teloxide = { version = "0.12", features = ["auto-send"], optional = true }
 serenity = { version = "0.12", features = ["client", "gateway", "model"], optional = true }
+slack-morphism = { version = "2.0", optional = true }
 
 [dev-dependencies]
 tokio-test = "0.4"
@@ -74,7 +76,8 @@ tempfile = "3.9"
 default = []
 telegram = ["teloxide"]
 discord = ["serenity"]
-all-channels = ["telegram", "discord"]
+slack = ["slack-morphism"]
+all-channels = ["telegram", "discord", "slack"]
 
 [profile.release]
 lto = true

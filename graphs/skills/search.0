@@ -1,0 +1,51 @@
+# Search Skill
+#
+# Performs web search and returns formatted results.
+# Requires network permission for external API calls.
+#
+# Inputs:
+#   - query: StringTensor containing search query
+#
+# Outputs:
+#   - results: StringTensor containing formatted search results
+#
+# Permissions:
+#   - network: Required for API calls
+
+Graph {
+    name: "search",
+    version: 1,
+    description: "Web search skill",
+    
+    nodes: [
+        { id: "query", type: Input, tensor_type: "string" },
+        
+        # Call external search API
+        { id: "search_api", type: External, 
+          uri: "https://api.search.example/search",
+          inputs: ["query"]
+        },
+        
+        # Parse JSON response
+        { id: "parse", type: Operation, op: JsonParse, inputs: ["search_api"] },
+        
+        # Extract results array
+        { id: "extract", type: Operation, op: JsonGet, 
+          inputs: ["parse"], 
+          path: "results" 
+        },
+        
+        # Format output
+        { id: "format", type: Operation, op: StringFormat,
+          inputs: ["extract"],
+          template: "Search Results:\n{}"
+        },
+    ],
+    
+    outputs: ["format"],
+    permissions: ["network"],
+    
+    proofs: [
+        HaltingProof { max_steps: 50, fuel_budget: 1000 }
+    ]
+}

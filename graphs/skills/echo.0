@@ -1,0 +1,32 @@
+# Echo Skill
+#
+# Simply returns the input message with an "Echo:" prefix.
+# Useful for testing and as a template for other skills.
+#
+# Inputs:
+#   - message: StringTensor containing the message to echo
+#
+# Outputs:
+#   - output: StringTensor containing the echoed message
+
+Graph {
+    name: "echo",
+    version: 1,
+    description: "Echoes input back to output",
+    
+    nodes: [
+        { id: "message", type: Input, tensor_type: "string" },
+        { id: "format", type: Operation, op: StringFormat, 
+          inputs: ["message"], 
+          template: "Echo: {}" 
+        },
+        { id: "output", type: Operation, op: Identity, inputs: ["format"] },
+    ],
+    
+    entry_point: "message",
+    outputs: ["output"],
+    
+    proofs: [
+        HaltingProof { max_steps: 3, fuel_budget: 100 }
+    ]
+}

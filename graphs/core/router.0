@@ -1,0 +1,214 @@
+# Main Router Graph
+#
+# Routes incoming messages to appropriate skills based on content analysis.
+# This is the primary decision-making graph for the 0-openclaw gateway.
+#
+# Inputs:
+#   - message: StringTensor containing message content
+#   - sender: StringTensor containing sender ID
+#   - channel: StringTensor containing channel ID
+#
+# Outputs:
+#   - skill_hash: ContentHash of the target skill
+#   - confidence: Confidence score for routing decision
+#   - params: Extracted parameters from the message
+#
+# Version: 1.0.0
+# Author: Agent #7
+# Created: 2026-02-02
+
+Graph {
+    name: "main_router",
+    version: 1,
+    description: "Routes messages to appropriate skills",
+    
+    # Input nodes - external data sources
+    nodes: [
+        # Primary inputs
+        {
+            id: "message",
+            type: External,
+            uri: "input://message",
+            description: "The incoming message content"
+        },
+        {
+            id: "sender",
+            type: External,
+            uri: "input://sender",
+            description: "The sender's identifier"
+        },
+        {
+            id: "channel",
+            type: External,
+            uri: "input://channel",
+            description: "The channel identifier"
+        },
+        
+        # Command detection layer
+        {
+            id: "is_command",
+            type: Operation,
+            op: StartsWith,
+            inputs: ["message"],
+            params: { prefix: "/" },
+            description: "Check if message is a slash command"
+        },
+        
+        # Extract command name
+        {
+            id: "command_name",
+            type: Operation,
+            op: ExtractFirstWord,
+            inputs: ["message"],
+            description: "Extract the command name (e.g., /help -> help)"
+        },
+        
+        # Command lookup
+        {
+            id: "command_lookup",
+            type: Lookup,
+            input: "command_name",
+            table: {
+                "/help": "skill:help",
+                "/status": "skill:status",
+                "/skills": "skill:list",
+                "/session": "skill:session",
+                "/remind": "skill:reminder",
+                "/search": "skill:search",
+                "/trade": "skill:trade",
+            },
+            default: "skill:unknown_command",
+            description: "Map command to skill hash"
+        },
+        
+        # Intent classification for non-commands
+        {
+            id: "intent_classifier",
+            type: Operation,
+            op: ClassifyIntent,
+            inputs: ["message"],
+            classes: [
+                "greeting",
+                "question",
+                "request",
+                "statement",
+                "other"
+            ],
+            description: "Classify the intent of non-command messages"
+        },
+        
+        # Conversation skill selection
+        {
+            id: "conversation_skill",
+            type: Lookup,
+            input: "intent_classifier",
+            table: {
+                "greeting": "skill:greeting",
+                "question": "skill:qa",
+                "request": "skill:assistant",
+                "statement": "skill:acknowledge",
+                "other": "skill:conversation"
+            },
+            default: "skill:conversation",
+            description: "Select conversation skill based on intent"
+        },
+        
+        # Route decision
+        {
+            id: "route_decision",
+            type: Route,
+            conditions: [
+                {
+                    input: "is_command",
+                    threshold: 0.9,
+                    target: "command_lookup",
+                    confidence: 0.95
+                },
+                {
+                    input: "default",
+                    threshold: 0.0,
+                    target: "conversation_skill",
+                    confidence: 0.7
+                }
+            ],
+            description: "Main routing decision"
+        },
+        
+        # Permission check
+        {
+            id: "permission_check",
+            type: Permission,
+            action: "route_decision",
+            sender: "sender",
+            channel: "channel",
+            min_confidence: 0.5,
+            description: "Verify sender has permission for this action"
+        },
+        
+        # Confidence calculation
+        {
+            id: "confidence",
+            type: Operation,
+            op: Multiply,
+            inputs: ["route_decision.confidence", "permission_check.confidence"],
+            description: "Combined confidence score"
+        },
+        
+        # Output aggregation
+        {
+            id: "skill_hash",
+            type: Operation,
+            op: GetField,
+            inputs: ["route_decision"],
+            field: "target",
+            description: "Extract target skill hash"
+        },
+        
+        # Parameter extraction
+        {
+            id: "params",
+            type: Operation,
+            op: ExtractParams,
+            inputs: ["message", "skill_hash"],
+            description: "Extract parameters for the skill"
+        }
+    ],
+    
+    # Graph entry point
+    entry_point: "message",
+    
+    # Graph outputs
+    outputs: ["skill_hash", "confidence", "params"],
+    
+    # Metadata
+    metadata: {
+        author: "Agent #7",
+        created: "2026-02-02",
+        tags: ["routing", "core", "gateway"],
+        dependencies: []
+    }
+}
+
+# Skill Registry Reference
+#
+# The following skills are expected to be available:
+#
+# Built-in Skills:
+#   - skill:help          - Display help information
+#   - skill:status        - Show gateway status
+#   - skill:list          - List installed skills
+#   - skill:session       - Session management
+#   - skill:conversation  - Default conversation handler
+#   - skill:greeting      - Handle greetings
+#   - skill:qa            - Question answering
+#   - skill:assistant     - General assistance
+#   - skill:acknowledge   - Acknowledge statements
+#
+# Optional Skills:
+#   - skill:reminder      - Set reminders
+#   - skill:search        - Search functionality
+#   - skill:trade         - Trading operations (CEX/DEX)
+#
+# Custom Skills:
+#   Custom skills can be registered via the SkillRegistry
+#   and will be routed to based on their registered triggers.

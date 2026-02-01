@@ -11,7 +11,7 @@ use std::fmt;
 ///
 /// ContentHash provides content-addressed identification: the same content
 /// always produces the same hash, enabling deterministic behavior verification.
-#[derive(Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Default)]
 pub struct ContentHash(pub [u8; 32]);
 
 impl ContentHash {

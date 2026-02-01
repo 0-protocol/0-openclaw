@@ -1,0 +1,181 @@
+# Slack Message Processing Graph
+#
+# This graph processes incoming Slack messages, slash commands, and app mentions.
+# Handles workspace-level permissions and Slack-specific features.
+#
+# Graph Format: 0-lang DSL (interpreted by 0-openclaw runtime)
+
+Graph {
+    name: "slack_processor",
+    version: 1,
+    description: "Processes Slack-specific message features",
+    
+    nodes: [
+        # Entry point: raw message input
+        { 
+            id: "input", 
+            type: External, 
+            uri: "input://message",
+            outputs: ["content", "sender_id", "metadata"]
+        },
+        
+        # Determine message type
+        {
+            id: "get_type",
+            type: Operation,
+            op: JsonGet,
+            inputs: ["input.metadata", "type"],
+            outputs: ["message_type"]
+        },
+        
+        # Check if slash command
+        {
+            id: "is_slash",
+            type: Operation,
+            op: Eq,
+            inputs: ["get_type.message_type", "slash_command"],
+            outputs: ["bool"]
+        },
+        
+        # Check if app mention
+        {
+            id: "is_mention",
+            type: Operation,
+            op: Eq,
+            inputs: ["get_type.message_type", "app_mention"],
+            outputs: ["bool"]
+        },
+        
+        # Branch for slash commands
+        {
+            id: "slash_branch",
+            type: Branch,
+            condition: "is_slash.bool",
+            true_branch: "process_slash",
+            false_branch: "check_mention_branch"
+        },
+        
+        # Branch for mentions
+        {
+            id: "check_mention_branch",
+            type: Branch,
+            condition: "is_mention.bool",
+            true_branch: "process_mention",
+            false_branch: "process_message"
+        },
+        
+        # Process slash command
+        {
+            id: "process_slash",
+            type: Operation,
+            op: JsonGet,
+            inputs: ["input.metadata", "command"],
+            outputs: ["command_name"]
+        },
+        
+        # Process app mention
+        {
+            id: "process_mention",
+            type: Operation,
+            op: Trim,
+            inputs: ["input.content"],
+            outputs: ["mention_content"]
+        },
+        
+        # Process regular message
+        {
+            id: "process_message",
+            type: Operation,
+            op: Trim,
+            inputs: ["input.content"],
+            outputs: ["message_content"]
+        },
+        
+        # Get channel for permission check
+        {
+            id: "get_channel",
+            type: Operation,
+            op: JsonGet,
+            inputs: ["input.metadata", "channel"],
+            outputs: ["channel_id"]
+        },
+        
+        # Channel permission check
+        {
+            id: "channel_permission",
+            type: Permission,
+            subject: "get_channel.channel_id",
+            action: "channel_access",
+            threshold: 0.5,
+            fallback: "channel_deny"
+        },
+        
+        # Check thread context
+        {
+            id: "get_thread",
+            type: Operation,
+            op: JsonGet,
+            inputs: ["input.metadata", "thread_ts"],
+            outputs: ["thread_ts"]
+        },
+        
+        {
+            id: "has_thread",
+            type: Operation,
+            op: IsNotNull,
+            inputs: ["get_thread.thread_ts"],
+            outputs: ["bool"]
+        },
+        
+        # Rate limiting (Slack is more restrictive)
+        {
+            id: "rate_limit",
+            type: RateLimit,
+            key: "input.sender_id",
+            limit: 10,
+            window_seconds: 60,
+            fallback: "rate_limit_response"
+        },
+        
+        # Channel deny
+        {
+            id: "channel_deny",
+            type: Constant,
+            value: {
+                action: "NoOp",
+                reason: "Channel not in allowlist"
+            }
+        },
+        
+        # Rate limit response
+        {
+            id: "rate_limit_response",
+            type: Constant,
+            value: {
+                action: "SendMessage",
+                content: "Rate limited. Slack requires slower message rates."
+            }
+        },
+        
+        # Output aggregation
+        {
+            id: "output",
+            type: Aggregate,
+            inputs: [
+                "slash_branch",
+                "channel_permission",
+                "rate_limit",
+                "has_thread"
+            ],
+            outputs: ["processed_message"]
+        }
+    ],
+    
+    outputs: ["output.processed_message"],
+    
+    metadata: {
+        author: "Agent #8",
+        created: "2024-01-01",
+        channel: "slack"
+    }
+}

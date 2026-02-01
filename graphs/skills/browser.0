@@ -1,0 +1,40 @@
+# Browser Skill
+#
+# Fetches and extracts content from web pages.
+# Requires network permission for HTTP requests.
+#
+# Inputs:
+#   - url: StringTensor containing the URL to fetch
+#
+# Outputs:
+#   - content: StringTensor containing the page content
+#
+# Permissions:
+#   - network: Required for HTTP requests
+
+Graph {
+    name: "browser",
+    version: 1,
+    description: "Fetches and extracts web page content",
+    
+    nodes: [
+        { id: "url", type: Input, tensor_type: "string" },
+        
+        # Fetch the page
+        { id: "fetch", type: Operation, op: HttpGet, inputs: ["url"] },
+        
+        # Format the output
+        { id: "extract_text", type: Operation, op: StringFormat,
+          inputs: ["fetch"],
+          template: "Page Content:\n{}"
+        },
+    ],
+    
+    outputs: ["extract_text"],
+    permissions: ["network"],
+    
+    proofs: [
+        HaltingProof { max_steps: 100, fuel_budget: 5000 },
+        MemoryBound { max_bytes: 5242880 }  # 5MB
+    ]
+}
