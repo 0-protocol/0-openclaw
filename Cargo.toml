@@ -1,0 +1,82 @@
+[package]
+name = "zero-openclaw"
+version = "0.1.0"
+edition = "2021"
+description = "Proof-carrying AI assistant built with 0-lang"
+license = "Apache-2.0"
+repository = "https://github.com/0-protocol/0-openclaw"
+keywords = ["ai", "assistant", "proof-carrying", "0-lang", "verifiable"]
+categories = ["command-line-utilities", "cryptography"]
+readme = "README.md"
+
+[lib]
+name = "zero_openclaw"
+path = "src/lib.rs"
+
+[[bin]]
+name = "zero-openclaw"
+path = "src/main.rs"
+
+[dependencies]
+# 0-lang core (local path for development)
+# zerolang = { path = "../0-lang" }
+# Uncomment above and comment below when 0-lang is available locally
+# For now, we'll make it optional
+# zerolang = { git = "https://github.com/0-protocol/0-lang", optional = true }
+
+# Async runtime
+tokio = { version = "1.35", features = ["full"] }
+async-trait = "0.1"
+futures = "0.3"
+
+# Serialization
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+# capnp = "0.18"
+
+# Cryptography
+ed25519-dalek = { version = "2.1", features = ["rand_core"] }
+sha2 = "0.10"
+rand = "0.8"
+
+# HTTP/WebSocket
+reqwest = { version = "0.11", features = ["json"] }
+tokio-tungstenite = { version = "0.21", features = ["native-tls"] }
+axum = { version = "0.7", features = ["ws"] }
+tower-http = { version = "0.5", features = ["cors", "trace"] }
+
+# CLI
+clap = { version = "4.4", features = ["derive", "env"] }
+
+# Logging
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+# Utilities
+uuid = { version = "1.6", features = ["v4"] }
+chrono = { version = "0.4", features = ["serde"] }
+thiserror = "1.0"
+anyhow = "1.0"
+hex = "0.4"
+
+# Channel libraries (optional features)
+teloxide = { version = "0.12", features = ["auto-send"], optional = true }
+serenity = { version = "0.12", features = ["client", "gateway", "model"], optional = true }
+
+[dev-dependencies]
+tokio-test = "0.4"
+tempfile = "3.9"
+
+[build-dependencies]
+# capnpc = "0.18"
+
+[features]
+default = []
+telegram = ["teloxide"]
+discord = ["serenity"]
+all-channels = ["telegram", "discord"]
+
+[profile.release]
+lto = true
+codegen-units = 1
+opt-level = 3

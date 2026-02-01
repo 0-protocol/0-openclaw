@@ -1,0 +1,48 @@
+# Rust
+/target/
+**/*.rs.bk
+Cargo.lock
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Build artifacts
+*.o
+*.a
+*.so
+*.dylib
+
+# Test artifacts
+*.profraw
+*.profdata
+
+# Documentation
+/docs/book/
+
+# Local configuration (contains secrets)
+config.json
+*.pem
+keypair
+*.key
+
+# Temporary files
+*.tmp
+*.temp
+*.log
+
+# Cap'n Proto generated files
+*.capnp.h
+*.capnp.c++
+
+# Coverage
+*.gcno
+*.gcda
+coverage/
