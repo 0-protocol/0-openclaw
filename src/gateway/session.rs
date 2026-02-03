@@ -2,10 +2,15 @@
 //!
 //! Sessions track the state of interactions between users and the assistant
 //! across channels. Each session maintains history, trust scores, and context.
+//!
+//! Trust calculation logic is defined in `graphs/core/session.0` and executed
+//! via the 0-lang graph interpreter.
 
 use std::collections::HashMap;
+use std::sync::Arc;
 use crate::types::{ContentHash, Confidence, ProofCarryingAction};
 use crate::error::SessionError;
+use crate::runtime::{GraphInterpreter, Graph, Value};
 
 /// Session manager responsible for creating and maintaining sessions.
 pub struct SessionManager {
@@ -17,6 +22,12 @@ pub struct SessionManager {
     
     /// Session configuration
     config: SessionManagerConfig,
+    
+    /// Graph interpreter for trust calculations
+    interpreter: Arc<GraphInterpreter>,
+    
+    /// Session management graph
+    session_graph: Option<Graph>,
 }
 
 /// Configuration for the session manager.
@@ -164,10 +175,89 @@ impl SessionManager {
 
     /// Create a session manager with custom configuration.
     pub fn with_config(config: SessionManagerConfig) -> Self {
+        let interpreter = Arc::new(GraphInterpreter::default());
+        
+        // Try to load the session graph
+        let session_graph = Self::load_session_graph();
+        
         Self {
             sessions: HashMap::new(),
             user_sessions: HashMap::new(),
             config,
+            interpreter,
+            session_graph,
+        }
+    }
+    
+    /// Load the session management graph.
+    fn load_session_graph() -> Option<Graph> {
+        // Try to load from file first
+        let graph_path = "graphs/core/session.0";
+        if let Ok(content) = std::fs::read_to_string(graph_path) {
+            if let Ok(graph) = crate::runtime::parse_graph(&content) {
+                return Some(graph);
+            }
+        }
+        
+        // Fall back to built-in graph
+        Some(Self::build_default_session_graph())
+    }
+    
+    /// Build the default session graph programmatically.
+    fn build_default_session_graph() -> Graph {
+        use crate::runtime::types::{GraphNode, NodeType};
+        
+        Graph {
+            name: "session_trust".to_string(),
+            version: 1,
+            description: "Session trust calculation graph".to_string(),
+            nodes: vec![
+                GraphNode {
+                    id: "current_trust".to_string(),
+                    node_type: NodeType::External { uri: "input://current_trust".to_string() },
+                    inputs: vec![],
+                    params: serde_json::json!({}),
+                },
+                GraphNode {
+                    id: "action_confidence".to_string(),
+                    node_type: NodeType::External { uri: "input://action_confidence".to_string() },
+                    inputs: vec![],
+                    params: serde_json::json!({}),
+                },
+                GraphNode {
+                    id: "alpha".to_string(),
+                    node_type: NodeType::Constant { value: Value::Float(0.1) },
+                    inputs: vec![],
+                    params: serde_json::json!({}),
+                },
+                GraphNode {
+                    id: "one_minus_alpha".to_string(),
+                    node_type: NodeType::Constant { value: Value::Float(0.9) },
+                    inputs: vec![],
+                    params: serde_json::json!({}),
+                },
+                GraphNode {
+                    id: "weighted_current".to_string(),
+                    node_type: NodeType::Operation { op: "Multiply".to_string() },
+                    inputs: vec!["current_trust".to_string(), "one_minus_alpha".to_string()],
+                    params: serde_json::json!({}),
+                },
+                GraphNode {
+                    id: "weighted_action".to_string(),
+                    node_type: NodeType::Operation { op: "Multiply".to_string() },
+                    inputs: vec!["action_confidence".to_string(), "alpha".to_string()],
+                    params: serde_json::json!({}),
+                },
+                GraphNode {
+                    id: "new_trust".to_string(),
+                    node_type: NodeType::Operation { op: "Add".to_string() },
+                    inputs: vec!["weighted_current".to_string(), "weighted_action".to_string()],
+                    params: serde_json::json!({}),
+                },
+            ],
+            outputs: vec!["new_trust".to_string()],
+            entry_point: "current_trust".to_string(),
+            metadata: serde_json::json!({}),
         }
     }
 
@@ -217,17 +307,25 @@ impl SessionManager {
         session_id: &ContentHash,
         action: &ProofCarryingAction,
     ) -> Result<(), SessionError> {
+        // Get current trust score first
+        let current_trust = {
+            let session = self.sessions.get(session_id)
+                .ok_or(SessionError::NotFound)?;
+            session.trust_score
+        };
+        
+        // Calculate new trust score using graph
+        let new_trust = self.calculate_trust(current_trust, action.confidence);
+        
+        // Now update the session
         let session = self.sessions.get_mut(session_id)
             .ok_or(SessionError::NotFound)?;
 
         // Update history
         session.add_to_history(action.input_hash);
 
-        // Update trust score using exponential moving average
-        session.trust_score = Self::update_trust(
-            session.trust_score,
-            action.confidence,
-        );
+        // Apply new trust score
+        session.trust_score = new_trust;
 
         // Update state version
         session.state.version += 1;
@@ -238,8 +336,38 @@ impl SessionManager {
         Ok(())
     }
 
-    /// Calculate new trust score using exponential moving average.
-    fn update_trust(current: Confidence, action_confidence: Confidence) -> Confidence {
+    /// Calculate new trust score using the 0-lang graph.
+    fn calculate_trust(&self, current: Confidence, action_confidence: Confidence) -> Confidence {
+        // If we have a graph, use it
+        if let Some(graph) = &self.session_graph {
+            let mut inputs = HashMap::new();
+            inputs.insert("current_trust".to_string(), Value::Float(current.value() as f64));
+            inputs.insert("action_confidence".to_string(), Value::Float(action_confidence.value() as f64));
+            
+            // Use tokio runtime for async execution
+            let interpreter = self.interpreter.clone();
+            let graph = graph.clone();
+            
+            let result = std::thread::spawn(move || {
+                let rt = tokio::runtime::Runtime::new().unwrap();
+                rt.block_on(async {
+                    interpreter.execute(&graph, inputs).await
+                })
+            }).join();
+            
+            if let Ok(Ok(exec_result)) = result {
+                if let Some(Value::Float(new_trust)) = exec_result.outputs.get("new_trust") {
+                    return Confidence::new(*new_trust as f32);
+                }
+            }
+        }
+        
+        // Fallback to direct calculation
+        Self::update_trust_fallback(current, action_confidence)
+    }
+    
+    /// Fallback trust calculation (when graph unavailable).
+    fn update_trust_fallback(current: Confidence, action_confidence: Confidence) -> Confidence {
         let alpha = 0.1;
         let new_value = (1.0 - alpha) * current.value() + alpha * action_confidence.value();
         Confidence::new(new_value)
@@ -381,9 +509,21 @@ mod tests {
     fn test_trust_update() {
         let current = Confidence::new(0.5);
         let action = Confidence::new(0.9);
-        let updated = SessionManager::update_trust(current, action);
+        let updated = SessionManager::update_trust_fallback(current, action);
         
         // Should move toward action confidence
+        assert!(updated.value() > 0.5);
+        assert!(updated.value() < 0.9);
+    }
+    
+    #[test]
+    fn test_graph_based_trust_update() {
+        let manager = SessionManager::new();
+        let current = Confidence::new(0.5);
+        let action = Confidence::new(0.9);
+        let updated = manager.calculate_trust(current, action);
+        
+        // Should move toward action confidence using graph
         assert!(updated.value() > 0.5);
         assert!(updated.value() < 0.9);
     }

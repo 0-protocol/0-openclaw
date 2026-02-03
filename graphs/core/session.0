@@ -1,0 +1,176 @@
+# Session Management Graph
+#
+# Handles session trust calculations and state transitions.
+# All session logic is expressed as verifiable graph operations.
+#
+# Inputs:
+#   - session_data: Current session state
+#   - action_confidence: Confidence from the last action
+#   - event_type: Type of session event (message, timeout, etc.)
+#
+# Outputs:
+#   - new_trust_score: Updated trust score
+#   - should_expire: Whether session should expire
+#   - state_update: State changes to apply
+
+Graph {
+    "name": "session_manager",
+    "version": 1,
+    "description": "Graph-based session management",
+    
+    "nodes": [
+        {
+            "id": "session_data",
+            "type": "External",
+            "uri": "input://session_data"
+        },
+        {
+            "id": "action_confidence",
+            "type": "External",
+            "uri": "input://action_confidence"
+        },
+        {
+            "id": "event_type",
+            "type": "External",
+            "uri": "input://event_type"
+        },
+        {
+            "id": "current_trust",
+            "type": "Operation",
+            "op": "GetField",
+            "inputs": ["session_data"],
+            "params": {"field": "trust_score"}
+        },
+        {
+            "id": "message_count",
+            "type": "Operation",
+            "op": "GetField",
+            "inputs": ["session_data"],
+            "params": {"field": "message_count"}
+        },
+        {
+            "id": "last_activity",
+            "type": "Operation",
+            "op": "GetField",
+            "inputs": ["session_data"],
+            "params": {"field": "last_activity"}
+        },
+        {
+            "id": "current_time",
+            "type": "Operation",
+            "op": "Timestamp",
+            "inputs": [],
+            "params": {}
+        },
+        {
+            "id": "time_since_activity",
+            "type": "Operation",
+            "op": "Subtract",
+            "inputs": ["current_time", "last_activity"],
+            "params": {}
+        },
+        {
+            "id": "timeout_threshold",
+            "type": "Constant",
+            "value": 3600000
+        },
+        {
+            "id": "should_expire",
+            "type": "Operation",
+            "op": "GreaterThan",
+            "inputs": ["time_since_activity", "timeout_threshold"],
+            "params": {}
+        },
+        {
+            "id": "trust_alpha",
+            "type": "Constant",
+            "value": 0.1
+        },
+        {
+            "id": "one_minus_alpha",
+            "type": "Constant",
+            "value": 0.9
+        },
+        {
+            "id": "weighted_current",
+            "type": "Operation",
+            "op": "Multiply",
+            "inputs": ["current_trust", "one_minus_alpha"],
+            "params": {}
+        },
+        {
+            "id": "weighted_action",
+            "type": "Operation",
+            "op": "Multiply",
+            "inputs": ["action_confidence", "trust_alpha"],
+            "params": {}
+        },
+        {
+            "id": "new_trust_raw",
+            "type": "Operation",
+            "op": "Add",
+            "inputs": ["weighted_current", "weighted_action"],
+            "params": {}
+        },
+        {
+            "id": "is_message_event",
+            "type": "Operation",
+            "op": "Equals",
+            "inputs": ["event_type"],
+            "params": {"compare": "message"}
+        },
+        {
+            "id": "is_timeout_event",
+            "type": "Operation",
+            "op": "Equals",
+            "inputs": ["event_type"],
+            "params": {"compare": "timeout"}
+        },
+        {
+            "id": "trust_decay_rate",
+            "type": "Constant",
+            "value": 0.99
+        },
+        {
+            "id": "decayed_trust",
+            "type": "Operation",
+            "op": "Multiply",
+            "inputs": ["current_trust", "trust_decay_rate"],
+            "params": {}
+        },
+        {
+            "id": "new_trust_score",
+            "type": "Operation",
+            "op": "If",
+            "inputs": ["is_message_event", "new_trust_raw", "decayed_trust"],
+            "params": {}
+        },
+        {
+            "id": "new_message_count",
+            "type": "Operation",
+            "op": "Add",
+            "inputs": ["message_count"],
+            "params": {"add": 1}
+        },
+        {
+            "id": "state_update",
+            "type": "Operation",
+            "op": "CreateMap",
+            "inputs": [],
+            "params": {
+                "trust_score": "new_trust_score",
+                "message_count": "new_message_count",
+                "last_activity": "current_time"
+            }
+        }
+    ],
+    
+    "outputs": ["new_trust_score", "should_expire", "state_update"],
+    "entry_point": "session_data",
+    
+    "metadata": {
+        "author": "Agent #10",
+        "version": "1.0",
+        "description": "Exponential moving average trust scoring with decay"
+    }
+}

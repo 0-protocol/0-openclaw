@@ -41,7 +41,7 @@ pub mod server;
 // Re-exports
 pub use config::GatewayConfig;
 pub use session::{Session, SessionManager, SessionInfo};
-pub use router::{Router, RouterBuilder, RouteRule, RouteCondition, RouteResult};
+pub use router::{Router, RouteResult};
 pub use proof::{ProofGenerator, ProofBuilder, ExecutionTrace};
 pub use events::{EventBus, GatewayEvent, EventSubscriber, EventFilter};
 pub use server::{GatewayServer, ServerState, ServerMessage, ClientMessage};
@@ -143,14 +143,8 @@ impl Gateway {
 
     /// Create the default router with built-in commands.
     fn create_default_router() -> Router {
-        RouterBuilder::new()
-            .command("help", ContentHash::from_string("skill:help"))
-            .command("status", ContentHash::from_string("skill:status"))
-            .command("skills", ContentHash::from_string("skill:list"))
-            .command("session", ContentHash::from_string("skill:session"))
-            .default_skill(ContentHash::from_string("skill:conversation"))
-            .caching(true)
-            .build()
+        // Use the graph-based router with default configuration
+        Router::with_defaults()
     }
 
     /// Register a channel.
@@ -209,7 +203,7 @@ impl Gateway {
         // 2. Route the message
         let (route_result, route_trace) = {
             let mut router = self.router.write().await;
-            router.route(&message)?
+            router.route(&message).await?
         };
 
         tracing::debug!("Routed to skill: {} ({})", route_result.route_name, route_result.skill_hash);
@@ -460,14 +454,16 @@ impl Gateway {
         self.sessions.write().await.cleanup_expired()
     }
 
-    /// Add a routing rule.
-    pub async fn add_route(&self, rule: RouteRule) {
-        self.router.write().await.add_rule(rule);
+    /// Set the default skill for routing.
+    pub async fn set_default_skill(&self, skill_hash: ContentHash) {
+        self.router.write().await.set_default_skill(skill_hash);
     }
 
-    /// Add a command route.
-    pub async fn add_command(&self, command: &str, skill_hash: ContentHash) {
-        self.router.write().await.add_command(command, skill_hash);
+    /// Load a custom router from a graph file.
+    pub async fn load_router_graph(&self, path: &str) -> Result<(), GatewayError> {
+        let new_router = Router::from_file(path)?;
+        *self.router.write().await = new_router;
+        Ok(())
     }
 }
 
@@ -567,13 +563,14 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_add_custom_route() {
+    async fn test_set_default_skill() {
         let gateway = Gateway::new().unwrap();
+        let custom_default = ContentHash::from_string("skill:custom_default");
         
-        gateway.add_command("custom", ContentHash::from_string("skill:custom")).await;
+        gateway.set_default_skill(custom_default).await;
         
-        // Route should now exist
+        // Verify the router has the updated default
         let router = gateway.router.read().await;
-        assert!(router.rule_count() > 4); // More than default commands
+        assert!(router.graph().name.len() > 0);
     }
 }

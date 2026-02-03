@@ -1,0 +1,143 @@
+# Skill Verifier Graph
+#
+# Verifies that skill graphs are safe to execute.
+# Checks for cycles, invalid references, and permission requirements.
+#
+# Inputs:
+#   - skill_graph: The skill graph to verify
+#   - node_count: Number of nodes in the graph
+#   - edge_count: Number of edges in the graph
+#   - has_cycles: Whether cycles were detected (from topo sort)
+#   - missing_refs: Count of missing node references
+#   - permissions_declared: Whether permissions are properly declared
+#
+# Outputs:
+#   - is_safe: Whether the skill is safe to execute
+#   - verification_score: Confidence in verification (0-1)
+#   - issues: Array of verification issues
+
+Graph {
+    "name": "skill_verifier",
+    "version": 1,
+    "description": "Graph-based skill verification",
+    
+    "nodes": [
+        {
+            "id": "node_count",
+            "type": "External",
+            "uri": "input://node_count"
+        },
+        {
+            "id": "edge_count",
+            "type": "External",
+            "uri": "input://edge_count"
+        },
+        {
+            "id": "has_cycles",
+            "type": "External",
+            "uri": "input://has_cycles"
+        },
+        {
+            "id": "missing_refs",
+            "type": "External",
+            "uri": "input://missing_refs"
+        },
+        {
+            "id": "permissions_declared",
+            "type": "External",
+            "uri": "input://permissions_declared"
+        },
+        {
+            "id": "no_cycles",
+            "type": "Operation",
+            "op": "Not",
+            "inputs": ["has_cycles"],
+            "params": {}
+        },
+        {
+            "id": "no_missing_refs",
+            "type": "Operation",
+            "op": "Equals",
+            "inputs": ["missing_refs"],
+            "params": {"compare": 0}
+        },
+        {
+            "id": "max_nodes",
+            "type": "Constant",
+            "value": 1000
+        },
+        {
+            "id": "node_count_ok",
+            "type": "Operation",
+            "op": "LessThan",
+            "inputs": ["node_count", "max_nodes"],
+            "params": {}
+        },
+        {
+            "id": "structure_valid",
+            "type": "Operation",
+            "op": "And",
+            "inputs": ["no_cycles", "no_missing_refs", "node_count_ok"],
+            "params": {}
+        },
+        {
+            "id": "is_safe",
+            "type": "Operation",
+            "op": "And",
+            "inputs": ["structure_valid", "permissions_declared"],
+            "params": {}
+        },
+        {
+            "id": "base_score",
+            "type": "Constant",
+            "value": 1.0
+        },
+        {
+            "id": "cycle_penalty",
+            "type": "Constant",
+            "value": 0.5
+        },
+        {
+            "id": "ref_penalty",
+            "type": "Constant",
+            "value": 0.1
+        },
+        {
+            "id": "cycle_deduction",
+            "type": "Operation",
+            "op": "If",
+            "inputs": ["has_cycles", "cycle_penalty"],
+            "params": {"else": 0}
+        },
+        {
+            "id": "ref_deduction",
+            "type": "Operation",
+            "op": "Multiply",
+            "inputs": ["missing_refs", "ref_penalty"],
+            "params": {}
+        },
+        {
+            "id": "total_deduction",
+            "type": "Operation",
+            "op": "Add",
+            "inputs": ["cycle_deduction", "ref_deduction"],
+            "params": {}
+        },
+        {
+            "id": "verification_score",
+            "type": "Operation",
+            "op": "Subtract",
+            "inputs": ["base_score", "total_deduction"],
+            "params": {}
+        }
+    ],
+    
+    "outputs": ["is_safe", "verification_score", "structure_valid"],
+    "entry_point": "node_count",
+    
+    "metadata": {
+        "author": "Agent #10",
+        "version": "1.0",
+        "description": "Multi-factor skill verification"
+    }
+}

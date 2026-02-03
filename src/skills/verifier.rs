@@ -1,14 +1,19 @@
 //! Skill Verifier - verify skill graphs are safe to execute.
 //!
 //! The SkillVerifier performs static analysis on skill graphs to ensure
-//! they are safe to execute. This includes:
+//! they are safe to execute. Verification logic is defined in the 0-lang
+//! graph at `graphs/core/verifier.0`.
+//!
+//! This includes:
 //! - Halting analysis (no infinite loops)
 //! - Type checking
 //! - Permission verification
 //! - Resource bound estimation
 
 use std::collections::{HashMap, HashSet};
+use std::sync::Arc;
 use crate::error::SkillError;
+use crate::runtime::{GraphInterpreter, Graph, Value};
 use super::graph::{SkillGraph, SkillNode, Op, SafetyProof};
 
 /// Result of skill verification.
@@ -164,14 +169,46 @@ impl std::fmt::Display for VerificationError {
 }
 
 /// Skill verifier for safety analysis.
-pub struct SkillVerifier;
+/// 
+/// Verification logic is defined in `graphs/core/verifier.0`.
+pub struct SkillVerifier {
+    /// Graph interpreter
+    interpreter: Arc<GraphInterpreter>,
+    /// Verification graph
+    verifier_graph: Option<Graph>,
+}
 
 impl SkillVerifier {
+    /// Create a new SkillVerifier.
+    pub fn new() -> Self {
+        Self {
+            interpreter: Arc::new(GraphInterpreter::default()),
+            verifier_graph: Self::load_verifier_graph(),
+        }
+    }
+    
+    /// Load the verification graph.
+    fn load_verifier_graph() -> Option<Graph> {
+        let graph_path = "graphs/core/verifier.0";
+        if let Ok(content) = std::fs::read_to_string(graph_path) {
+            if let Ok(graph) = crate::runtime::parse_graph(&content) {
+                return Some(graph);
+            }
+        }
+        None
+    }
+
     /// Verify a skill graph is safe to execute.
     ///
     /// # Returns
     /// A `VerificationResult` containing the analysis outcome.
     pub fn verify(graph: &SkillGraph) -> Result<VerificationResult, SkillError> {
+        let verifier = Self::new();
+        verifier.verify_with_graph(graph)
+    }
+    
+    /// Verify using the 0-lang verification graph.
+    pub fn verify_with_graph(&self, graph: &SkillGraph) -> Result<VerificationResult, SkillError> {
         let mut result = VerificationResult::pass();
         
         // Check for empty graph

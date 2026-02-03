@@ -77,6 +77,12 @@ pub enum GatewayError {
 
     #[error("Session error: {0}")]
     SessionError(String),
+
+    #[error("Execution error: {0}")]
+    ExecutionError(String),
+
+    #[error("Config error: {0}")]
+    ConfigError(String),
 }
 
 impl From<SessionError> for GatewayError {

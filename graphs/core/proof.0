@@ -1,0 +1,139 @@
+# Proof Generation Graph
+#
+# Generates cryptographic proofs for Proof-Carrying Actions.
+# Handles execution trace aggregation, confidence calculation,
+# and proof construction.
+#
+# Inputs:
+#   - action: The action to be proven
+#   - session_hash: Hash of the session
+#   - input_hash: Hash of the input that triggered this action
+#   - execution_traces: Array of execution traces
+#
+# Outputs:
+#   - proof_data: Data to be signed
+#   - combined_confidence: Aggregated confidence score
+#   - trace_hash: Hash of combined execution trace
+
+Graph {
+    "name": "proof_generator",
+    "version": 1,
+    "description": "Graph-based proof generation for PCAs",
+    
+    "nodes": [
+        {
+            "id": "action",
+            "type": "External",
+            "uri": "input://action"
+        },
+        {
+            "id": "session_hash",
+            "type": "External",
+            "uri": "input://session_hash"
+        },
+        {
+            "id": "input_hash",
+            "type": "External",
+            "uri": "input://input_hash"
+        },
+        {
+            "id": "traces",
+            "type": "External",
+            "uri": "input://traces"
+        },
+        {
+            "id": "timestamp",
+            "type": "Operation",
+            "op": "Timestamp",
+            "inputs": [],
+            "params": {}
+        },
+        {
+            "id": "action_hash",
+            "type": "Operation",
+            "op": "Hash",
+            "inputs": ["action"],
+            "params": {}
+        },
+        {
+            "id": "trace_hash",
+            "type": "Operation",
+            "op": "Hash",
+            "inputs": ["traces"],
+            "params": {}
+        },
+        {
+            "id": "trace_count",
+            "type": "Operation",
+            "op": "Length",
+            "inputs": ["traces"],
+            "params": {}
+        },
+        {
+            "id": "base_confidence",
+            "type": "Constant",
+            "value": 1.0
+        },
+        {
+            "id": "confidence_decay",
+            "type": "Constant",
+            "value": 0.98
+        },
+        {
+            "id": "one",
+            "type": "Constant",
+            "value": 1
+        },
+        {
+            "id": "trace_minus_one",
+            "type": "Operation",
+            "op": "Subtract",
+            "inputs": ["trace_count", "one"],
+            "params": {}
+        },
+        {
+            "id": "decay_factor",
+            "type": "Operation",
+            "op": "Multiply",
+            "inputs": ["confidence_decay", "trace_minus_one"],
+            "params": {}
+        },
+        {
+            "id": "combined_confidence",
+            "type": "Operation",
+            "op": "Subtract",
+            "inputs": ["base_confidence", "decay_factor"],
+            "params": {}
+        },
+        {
+            "id": "proof_data",
+            "type": "Operation",
+            "op": "CreateMap",
+            "inputs": [],
+            "params": {
+                "action_hash": "action_hash",
+                "session_hash": "session_hash",
+                "input_hash": "input_hash",
+                "trace_hash": "trace_hash",
+                "timestamp": "timestamp",
+                "confidence": "combined_confidence"
+            }
+        },
+        {
+            "id": "proof_hash",
+            "type": "Operation",
+            "op": "Hash",
+            "inputs": ["proof_data"],
+            "params": {}
+        }
+    ],
+    
+    "outputs": ["proof_data", "combined_confidence", "trace_hash", "proof_hash", "timestamp"],
+    "entry_point": "action",
+    
+    "metadata": {
+        "author": "Agent #10",
+        "version": "1.0",
+        "description": "Proof construction with trace aggregation"
+    }
+}

@@ -31,6 +31,7 @@
 
 pub mod types;
 pub mod error;
+pub mod runtime;
 pub mod gateway;
 pub mod channels;
 pub mod skills;
@@ -46,6 +47,7 @@ pub use types::{
     Action,
 };
 pub use error::{Error, Result};
+pub use runtime::{GraphInterpreter, Graph, Value, ExecutionResult};
 
 /// Library version
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");

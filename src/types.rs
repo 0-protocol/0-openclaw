@@ -32,6 +32,11 @@ impl ContentHash {
         Self([0u8; 32])
     }
 
+    /// Check if this is a zero hash.
+    pub fn is_zero(&self) -> bool {
+        self.0 == [0u8; 32]
+    }
+
     /// Get the hash as a hex string.
     pub fn to_hex(&self) -> String {
         hex::encode(self.0)

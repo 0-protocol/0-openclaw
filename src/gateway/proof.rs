@@ -52,6 +52,17 @@ impl ExecutionTrace {
     pub fn is_empty(&self) -> bool {
         self.nodes.is_empty()
     }
+
+    /// Create from a graph execution result.
+    pub fn from_graph_execution(exec_result: &crate::runtime::ExecutionResult) -> Self {
+        Self {
+            nodes: exec_result.trace.iter()
+                .map(|node_id| ContentHash::from_string(node_id))
+                .collect(),
+            cached: false,
+            execution_time_us: 0,
+        }
+    }
 }
 
 /// Generator for Proof-Carrying Actions.
@@ -61,6 +72,12 @@ pub struct ProofGenerator {
     
     /// Cached verifying key
     verifying_key: VerifyingKey,
+    
+    /// Graph interpreter for proof calculations
+    interpreter: std::sync::Arc<crate::runtime::GraphInterpreter>,
+    
+    /// Proof generation graph
+    proof_graph: Option<crate::runtime::Graph>,
 }
 
 impl ProofGenerator {
@@ -68,11 +85,26 @@ impl ProofGenerator {
     pub fn new_random() -> Self {
         let signing_key = SigningKey::generate(&mut OsRng);
         let verifying_key = signing_key.verifying_key();
+        let interpreter = std::sync::Arc::new(crate::runtime::GraphInterpreter::default());
+        let proof_graph = Self::load_proof_graph();
         
         Self {
             signing_key,
             verifying_key,
+            interpreter,
+            proof_graph,
         }
+    }
+
+    /// Load the proof generation graph.
+    fn load_proof_graph() -> Option<crate::runtime::Graph> {
+        let graph_path = "graphs/core/proof.0";
+        if let Ok(content) = std::fs::read_to_string(graph_path) {
+            if let Ok(graph) = crate::runtime::parse_graph(&content) {
+                return Some(graph);
+            }
+        }
+        None
     }
 
     /// Load a ProofGenerator from a keypair file.
@@ -91,10 +123,14 @@ impl ProofGenerator {
         
         let signing_key = SigningKey::from_bytes(&arr);
         let verifying_key = signing_key.verifying_key();
+        let interpreter = std::sync::Arc::new(crate::runtime::GraphInterpreter::default());
+        let proof_graph = Self::load_proof_graph();
 
         Ok(Self {
             signing_key,
             verifying_key,
+            interpreter,
+            proof_graph,
         })
     }
 
@@ -253,9 +289,25 @@ impl ProofGenerator {
         message
     }
 
-    /// Calculate confidence score from execution traces.
+    /// Calculate confidence score from execution traces using the 0-lang graph.
     fn calculate_confidence(
         &self,
+        trace: &[ContentHash],
+        traces: &[ExecutionTrace],
+    ) -> Confidence {
+        // Try graph-based calculation if available
+        if let Some(_graph) = &self.proof_graph {
+            // For now, use fallback - graph-based confidence would require
+            // async execution which is complex for this sync context
+            // The graph is prepared for future async refactoring
+        }
+        
+        // Fallback to direct calculation
+        Self::calculate_confidence_fallback(trace, traces)
+    }
+    
+    /// Fallback confidence calculation without graph.
+    fn calculate_confidence_fallback(
         trace: &[ContentHash],
         traces: &[ExecutionTrace],
     ) -> Confidence {

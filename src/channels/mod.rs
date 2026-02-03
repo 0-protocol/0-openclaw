@@ -3,13 +3,30 @@
 //! Channels connect 0-openclaw to messaging platforms like Telegram, Discord, and Slack.
 //! Each channel implements the `Channel` trait for standardized message handling.
 //!
+//! ## Architecture
+//!
+//! Channel code is kept minimal - acting as thin API adapters. Message processing logic
+//! is defined in 0-lang graphs:
+//!
+//! ```text
+//! ┌─────────────────┐     ┌────────────────────┐
+//! │  Channel API    │────▶│  0-lang Graph      │
+//! │  (Rust adapter) │     │  (Processing)      │
+//! │  ~100 lines     │     │  graphs/channels/  │
+//! └─────────────────┘     └────────────────────┘
+//! ```
+//!
+//! - `graphs/channels/telegram.0` - Telegram message processing
+//! - `graphs/channels/discord.0` - Discord message processing  
+//! - `graphs/channels/slack.0` - Slack message processing
+//!
 //! ## Supported Channels
 //!
-//! | Channel  | Status      | Feature Flag |
-//! |----------|-------------|--------------|
-//! | Telegram | Implemented | `telegram`   |
-//! | Discord  | Implemented | `discord`    |
-//! | Slack    | Implemented | -            |
+//! | Channel  | Status      | Feature Flag | Graph File          |
+//! |----------|-------------|--------------|---------------------|
+//! | Telegram | Implemented | `telegram`   | `telegram.0`        |
+//! | Discord  | Implemented | `discord`    | `discord.0`         |
+//! | Slack    | Implemented | -            | `slack.0`           |
 //!
 //! ## Usage
 //!
