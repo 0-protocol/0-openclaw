@@ -7,17 +7,19 @@ mod echo;
 mod search;
 mod browser;
 mod calendar;
+mod trade;
 
 pub use echo::create_echo_skill;
 pub use search::create_search_skill;
 pub use browser::create_browser_skill;
 pub use calendar::create_calendar_skill;
+pub use trade::create_trade_skill;
 
 use super::graph::SkillGraph;
 
 /// List all built-in skill names.
 pub fn builtin_skill_names() -> Vec<&'static str> {
-    vec!["echo", "search", "browser", "calendar"]
+    vec!["echo", "search", "browser", "calendar", "trade"]
 }
 
 /// Create all built-in skills.
@@ -27,6 +29,7 @@ pub fn create_all_builtin() -> Vec<(&'static str, SkillGraph)> {
         ("search", create_search_skill()),
         ("browser", create_browser_skill()),
         ("calendar", create_calendar_skill()),
+        ("trade", create_trade_skill()),
     ]
 }
 
@@ -37,6 +40,7 @@ pub fn get_builtin(name: &str) -> Option<SkillGraph> {
         "search" => Some(create_search_skill()),
         "browser" => Some(create_browser_skill()),
         "calendar" => Some(create_calendar_skill()),
+        "trade" => Some(create_trade_skill()),
         _ => None,
     }
 }
@@ -52,12 +56,13 @@ mod tests {
         assert!(names.contains(&"search"));
         assert!(names.contains(&"browser"));
         assert!(names.contains(&"calendar"));
+        assert!(names.contains(&"trade"));
     }
 
     #[test]
     fn test_create_all() {
         let skills = create_all_builtin();
-        assert_eq!(skills.len(), 4);
+        assert_eq!(skills.len(), 5);
     }
 
     #[test]

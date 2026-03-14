@@ -50,7 +50,16 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 
-use crate::types::{ContentHash, IncomingMessage, OutgoingMessage, Action, ProofCarryingAction};
+use crate::runtime::{GraphInterpreter, Value};
+use crate::types::{
+    Action,
+    ActionLane,
+    ContentHash,
+    EffectReceipt,
+    IncomingMessage,
+    OutgoingMessage,
+    ProofCarryingAction,
+};
 use crate::error::GatewayError;
 use crate::channels::Channel;
 use crate::skills::SkillRegistry;
@@ -75,6 +84,9 @@ pub struct Gateway {
     
     /// Skill registry
     skills: Arc<RwLock<SkillRegistry>>,
+    
+    /// Runtime interpreter for skill graphs.
+    runtime: Arc<GraphInterpreter>,
     
     /// Proof generator
     proof_generator: Arc<ProofGenerator>,
@@ -129,11 +141,17 @@ impl Gateway {
         // Initialize router
         let router = Self::create_default_router();
 
+        let mut skill_registry = SkillRegistry::new(&config.skills_path);
+        if let Err(e) = skill_registry.load_builtin() {
+            tracing::warn!("Failed to load built-in skills at startup: {}", e);
+        }
+
         Ok(Self {
             sessions: Arc::new(RwLock::new(SessionManager::with_config(session_config))),
             router: Arc::new(RwLock::new(router)),
             channels: HashMap::new(),
-            skills: Arc::new(RwLock::new(SkillRegistry::new(&config.skills_path))),
+            skills: Arc::new(RwLock::new(skill_registry)),
+            runtime: Arc::new(GraphInterpreter::default()),
             proof_generator: Arc::new(proof_generator),
             event_bus: EventBus::new().with_history(1000),
             config,
@@ -214,12 +232,74 @@ impl Gateway {
             skill_name: route_result.route_name.clone(),
         }).await;
 
-        // 3. Execute skill (placeholder - would invoke 0-lang VM)
-        let (action, skill_trace) = self.execute_skill(
-            &route_result.skill_hash,
-            &message,
-            &route_result.params,
-        ).await?;
+        // 3. Apply lane policy then execute skill when permitted.
+        let (action, skill_trace) = match route_result.lane {
+            ActionLane::Execute => {
+                self.execute_skill(
+                    &route_result.skill_ref,
+                    &route_result.skill_hash,
+                    &message,
+                    &route_result.params,
+                )
+                .await?
+            }
+            ActionLane::Clarify => (
+                Action::SendMessage(
+                    OutgoingMessage::new(
+                        &message.channel_id,
+                        &message.sender_id,
+                        "I need more detail before taking action. Please clarify intent and parameters.",
+                    )
+                    .reply_to(message.id),
+                ),
+                ExecutionTrace::new(),
+            ),
+            ActionLane::Deny => (
+                Action::SendMessage(
+                    OutgoingMessage::new(
+                        &message.channel_id,
+                        &message.sender_id,
+                        "Request denied due to low confidence and permission risk.",
+                    )
+                    .reply_to(message.id),
+                ),
+                ExecutionTrace::new(),
+            ),
+            ActionLane::AskApproval => {
+                let (candidate, trace) = self
+                    .execute_skill(
+                        &route_result.skill_ref,
+                        &route_result.skill_hash,
+                        &message,
+                        &route_result.params,
+                    )
+                    .await?;
+                let action = match candidate {
+                    Action::SendMessage(mut msg) => {
+                        msg.content = format!(
+                            "{}\n\nApproval required before execution. Reply `approve` to continue.",
+                            msg.content
+                        );
+                        Action::SendMessage(msg)
+                    }
+                    _ => Action::SendMessage(
+                        OutgoingMessage::new(
+                            &message.channel_id,
+                            &message.sender_id,
+                            "Approval required before execution. Reply `approve` to continue.",
+                        )
+                        .reply_to(message.id),
+                    ),
+                };
+                (action, trace)
+            }
+            ActionLane::Defer => (
+                Action::NoOp {
+                    reason: "Execution deferred by confidence lane".to_string(),
+                },
+                ExecutionTrace::new(),
+            ),
+        };
 
         // 4. Generate proof-carrying action
         let pca = self.proof_generator.generate(
@@ -232,7 +312,7 @@ impl Gateway {
         // 5. Update session
         {
             let mut sessions = self.sessions.write().await;
-            sessions.update(&session_id, &pca)
+            sessions.update(&session_id, &pca).await
                 .map_err(|e| GatewayError::RouterError(e.to_string()))?;
         }
 
@@ -249,31 +329,95 @@ impl Gateway {
 
     /// Execute a skill graph.
     ///
-    /// This is a placeholder that would integrate with the 0-lang VM.
     async fn execute_skill(
         &self,
+        skill_ref: &str,
         skill_hash: &ContentHash,
         message: &IncomingMessage,
         params: &HashMap<String, String>,
     ) -> Result<(Action, ExecutionTrace), GatewayError> {
-        let mut trace = ExecutionTrace::new();
-        trace.add_node(*skill_hash);
-
-        // Check if skill exists
         let skills = self.skills.read().await;
-        
-        // For now, return a placeholder action based on the skill
-        let action = if let Some(_skill) = skills.get(skill_hash) {
-            // Skill exists, would execute via VM
-            Action::NoOp {
-                reason: format!("Skill {} execution not yet implemented", skill_hash),
+        let skill_from_name = skill_ref.strip_prefix("skill:")
+            .and_then(|name| skills.get_by_name(name));
+
+        let action = if let Some(skill) = skills.get(skill_hash).or(skill_from_name) {
+            let runtime_graph = skill
+                .graph
+                .to_runtime_graph()
+                .map_err(|e| GatewayError::VmError(e.to_string()))?;
+
+            let mut inputs = HashMap::new();
+            inputs.insert("message".to_string(), Value::String(message.content.clone()));
+            inputs.insert("sender".to_string(), Value::String(message.sender_id.clone()));
+            inputs.insert("channel".to_string(), Value::String(message.channel_id.clone()));
+            for (k, v) in params {
+                inputs.insert(k.clone(), Value::String(v.clone()));
             }
+
+            let exec_result = self
+                .runtime
+                .execute(&runtime_graph, inputs)
+                .await
+                .map_err(|e| GatewayError::VmError(e.to_string()))?;
+
+            let trace = ExecutionTrace::from_graph_execution(&exec_result);
+            let action = self.action_from_skill_output(message, &exec_result.outputs);
+            return Ok((action, trace));
         } else {
             // Built-in command handling
             self.handle_builtin_command(message, params)?
         };
-
+        let mut trace = ExecutionTrace::new();
+        trace.add_node(*skill_hash);
         Ok((action, trace))
+    }
+
+    fn action_from_skill_output(
+        &self,
+        message: &IncomingMessage,
+        outputs: &HashMap<String, Value>,
+    ) -> Action {
+        let action_type = outputs
+            .get("action_type")
+            .and_then(Value::as_string)
+            .unwrap_or("send_message");
+
+        match action_type {
+            "noop" => Action::NoOp {
+                reason: outputs
+                    .get("reason")
+                    .and_then(Value::as_string)
+                    .unwrap_or("skill requested noop")
+                    .to_string(),
+            },
+            "update_session" => Action::UpdateSession {
+                session_id: ContentHash::from_string(
+                    outputs
+                        .get("session_id")
+                        .and_then(Value::as_string)
+                        .unwrap_or("unknown-session"),
+                ),
+                updates: serde_json::json!({
+                    "note": outputs.get("content").and_then(Value::as_string).unwrap_or_default()
+                }),
+            },
+            _ => {
+                let content = outputs
+                    .get("content")
+                    .and_then(Value::as_string)
+                    .or_else(|| {
+                        outputs
+                            .values()
+                            .find_map(|v| if let Value::String(s) = v { Some(s.as_str()) } else { None })
+                    })
+                    .unwrap_or("Skill executed.");
+
+                Action::SendMessage(
+                    OutgoingMessage::new(&message.channel_id, &message.sender_id, content)
+                        .reply_to(message.id),
+                )
+            }
+        }
     }
 
     /// Handle built-in commands.
@@ -292,7 +436,8 @@ impl Gateway {
                  /help - Show this help message\n\
                  /status - Show gateway status\n\
                  /skills - List installed skills\n\
-                 /session - Show session info",
+                 /session - Show session info\n\
+                 /trade - Run simulation-first trade flow",
             ).reply_to(message.id)))
         } else if content.starts_with("/status") {
             Ok(Action::SendMessage(OutgoingMessage::new(
@@ -320,7 +465,7 @@ impl Gateway {
     /// Execute a proof-carrying action.
     pub async fn execute_action(
         &self,
-        pca: &ProofCarryingAction,
+        pca: &mut ProofCarryingAction,
     ) -> Result<(), GatewayError> {
         // Verify the proof first
         self.proof_generator.verify(pca)
@@ -329,8 +474,22 @@ impl Gateway {
         match &pca.action {
             Action::SendMessage(msg) => {
                 if let Some(channel) = self.channels.get(&msg.channel_id) {
-                    channel.send(msg.clone()).await
+                    let receipt = channel.send(msg.clone()).await
                         .map_err(|e| GatewayError::ChannelNotFound(e.to_string()))?;
+                    pca.effect_trace.push(EffectReceipt {
+                        kind: "message_sent".to_string(),
+                        target: msg.channel_id.clone(),
+                        receipt_id: ContentHash::from_string(&format!(
+                            "{}:{}:{}",
+                            msg.channel_id, msg.recipient_id, msg.content
+                        )),
+                        details: serde_json::json!({
+                            "recipient_id": msg.recipient_id,
+                            "reply_to": msg.reply_to.map(|v| v.to_hex()),
+                            "channel_proof_signed": receipt.is_signed(),
+                        }),
+                        timestamp: chrono::Utc::now().timestamp_millis() as u64,
+                    });
                 }
             }
             Action::ExecuteSkill { skill_hash, inputs: _ } => {
@@ -342,6 +501,12 @@ impl Gateway {
             Action::NoOp { reason } => {
                 tracing::debug!("NoOp: {}", reason);
             }
+        }
+
+        if !pca.effect_trace.is_empty() {
+            self.proof_generator
+                .resign(pca)
+                .map_err(|e| GatewayError::VmError(format!("Failed to sign effect trace: {}", e)))?;
         }
 
         // Publish action executed event
@@ -376,11 +541,7 @@ impl Gateway {
         for (name, channel) in &self.channels {
             let channel = channel.clone();
             let channel_name = name.clone();
-            let _sessions = self.sessions.clone();
-            let _router = self.router.clone();
-            let _proof_generator = self.proof_generator.clone();
-            let _event_bus = self.event_bus.clone();
-            let _skills = self.skills.clone();
+            let gateway = self.clone();
 
             tokio::spawn(async move {
                 tracing::info!("Starting channel listener: {}", channel_name);
@@ -389,9 +550,16 @@ impl Gateway {
                     match channel.receive().await {
                         Ok(message) => {
                             tracing::debug!("Received message on {}: {}", channel_name, message.id);
-                            
-                            // Process message (simplified version without full gateway context)
-                            // In production, this would call back to the gateway
+                            match gateway.process_message(message).await {
+                                Ok(mut pca) => {
+                                    if let Err(err) = gateway.execute_action(&mut pca).await {
+                                        tracing::error!("Action execution failed on {}: {}", channel_name, err);
+                                    }
+                                }
+                                Err(err) => {
+                                    tracing::error!("Gateway processing failed on {}: {}", channel_name, err);
+                                }
+                            }
                         }
                         Err(e) => {
                             tracing::error!("Channel {} receive error: {}", channel_name, e);
@@ -481,6 +649,7 @@ impl Clone for Gateway {
             router: self.router.clone(),
             channels: self.channels.clone(),
             skills: self.skills.clone(),
+            runtime: self.runtime.clone(),
             proof_generator: self.proof_generator.clone(),
             event_bus: self.event_bus.clone(),
             config: self.config.clone(),

@@ -158,6 +158,7 @@ mod tests {
         assert!(registry.get_by_name("search").is_some());
         assert!(registry.get_by_name("browser").is_some());
         assert!(registry.get_by_name("calendar").is_some());
+        assert!(registry.get_by_name("trade").is_some());
     }
 
     #[test]

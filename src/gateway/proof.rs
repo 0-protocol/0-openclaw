@@ -7,7 +7,7 @@ use ed25519_dalek::{SigningKey, VerifyingKey, Signature, Signer, Verifier};
 use rand::rngs::OsRng;
 use std::path::Path;
 
-use crate::types::{ContentHash, Confidence, Action, ProofCarryingAction};
+use crate::types::{Action, Confidence, ContentHash, EffectReceipt, ProofCarryingAction};
 use crate::error::ProofError;
 
 /// Execution trace from graph evaluation.
@@ -161,20 +161,21 @@ impl ProofGenerator {
         let timestamp = chrono::Utc::now().timestamp_millis() as u64;
 
         // Combine all traces
-        let execution_trace: Vec<ContentHash> = traces
+        let decision_trace: Vec<ContentHash> = traces
             .iter()
             .flat_map(|t| t.nodes.iter().copied())
             .collect();
 
         // Calculate combined confidence
-        let confidence = self.calculate_confidence(&execution_trace, &traces);
+        let confidence = self.calculate_confidence(&decision_trace, &traces);
 
         // Build message to sign
         let message = self.build_sign_message(
             &action,
             &session_hash,
             &input_hash,
-            &execution_trace,
+            &decision_trace,
+            &[],
             confidence,
             timestamp,
         );
@@ -186,7 +187,8 @@ impl ProofGenerator {
             action,
             session_hash,
             input_hash,
-            execution_trace,
+            decision_trace,
+            effect_trace: Vec::new(),
             confidence,
             signature: signature.to_bytes(),
             timestamp,
@@ -199,7 +201,8 @@ impl ProofGenerator {
             &pca.action,
             &pca.session_hash,
             &pca.input_hash,
-            &pca.execution_trace,
+            &pca.decision_trace,
+            &pca.effect_trace,
             pca.confidence,
             pca.timestamp,
         );
@@ -221,7 +224,8 @@ impl ProofGenerator {
             &pca.action,
             &pca.session_hash,
             &pca.input_hash,
-            &pca.execution_trace,
+            &pca.decision_trace,
+            &pca.effect_trace,
             pca.confidence,
             pca.timestamp,
         );
@@ -234,13 +238,30 @@ impl ProofGenerator {
             .map_err(|e| ProofError::VerificationFailed(e.to_string()))
     }
 
+    /// Re-sign a PCA after effect receipts are attached.
+    pub fn resign(&self, pca: &mut ProofCarryingAction) -> Result<(), ProofError> {
+        let message = self.build_sign_message(
+            &pca.action,
+            &pca.session_hash,
+            &pca.input_hash,
+            &pca.decision_trace,
+            &pca.effect_trace,
+            pca.confidence,
+            pca.timestamp,
+        );
+        let signature: Signature = self.signing_key.sign(&message);
+        pca.signature = signature.to_bytes();
+        Ok(())
+    }
+
     /// Build the message to be signed.
     fn build_sign_message(
         &self,
         action: &Action,
         session_hash: &ContentHash,
         input_hash: &ContentHash,
-        execution_trace: &[ContentHash],
+        decision_trace: &[ContentHash],
+        effect_trace: &[EffectReceipt],
         confidence: Confidence,
         timestamp: u64,
     ) -> Vec<u8> {
@@ -248,7 +269,8 @@ impl ProofGenerator {
             action,
             session_hash,
             input_hash,
-            execution_trace,
+            decision_trace,
+            effect_trace,
             confidence,
             timestamp,
         )
@@ -259,7 +281,8 @@ impl ProofGenerator {
         action: &Action,
         session_hash: &ContentHash,
         input_hash: &ContentHash,
-        execution_trace: &[ContentHash],
+        decision_trace: &[ContentHash],
+        effect_trace: &[EffectReceipt],
         confidence: Confidence,
         timestamp: u64,
     ) -> Vec<u8> {
@@ -275,10 +298,14 @@ impl ProofGenerator {
         // Add input hash
         message.extend_from_slice(input_hash.as_bytes());
 
-        // Add execution trace
-        for trace_hash in execution_trace {
+        // Add decision trace
+        for trace_hash in decision_trace {
             message.extend_from_slice(trace_hash.as_bytes());
         }
+
+        // Add effect trace receipts
+        let receipt_bytes = serde_json::to_vec(effect_trace).unwrap_or_default();
+        message.extend_from_slice(&receipt_bytes);
 
         // Add confidence
         message.extend_from_slice(&confidence.value().to_le_bytes());

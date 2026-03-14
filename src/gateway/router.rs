@@ -8,7 +8,7 @@ use std::collections::HashMap;
 use std::path::Path;
 use std::sync::Arc;
 
-use crate::types::{ContentHash, IncomingMessage};
+use crate::types::{ActionLane, ContentHash, IncomingMessage};
 use crate::error::GatewayError;
 use crate::runtime::{GraphInterpreter, Graph, Value, ExecutionResult};
 use super::proof::ExecutionTrace;
@@ -16,6 +16,9 @@ use super::proof::ExecutionTrace;
 /// Route information describing how to handle a message.
 #[derive(Debug, Clone)]
 pub struct RouteResult {
+    /// Skill reference emitted by graph (e.g. `skill:trade`).
+    pub skill_ref: String,
+    
     /// Target skill hash
     pub skill_hash: ContentHash,
     
@@ -24,6 +27,9 @@ pub struct RouteResult {
     
     /// Name of the matched route
     pub route_name: String,
+    
+    /// Confidence lane selected for this route
+    pub lane: ActionLane,
     
     /// Extracted parameters from the message
     pub params: HashMap<String, String>,
@@ -284,10 +290,13 @@ impl Router {
         message: &IncomingMessage,
     ) -> Result<RouteResult, GatewayError> {
         // Get skill target from outputs
-        let skill_hash = exec_result.outputs.get("skill_target")
+        let skill_ref = exec_result
+            .outputs
+            .get("skill_target")
             .and_then(|v| v.as_string())
-            .map(|s| ContentHash::from_string(s))
-            .unwrap_or_else(|| self.default_skill);
+            .unwrap_or("skill:default")
+            .to_string();
+        let skill_hash = ContentHash::from_string(&skill_ref);
 
         // Get route decision info
         let route_info = exec_result.outputs.get("route_decision")
@@ -331,11 +340,44 @@ impl Router {
             .unwrap_or_default();
 
         Ok(RouteResult {
+            skill_ref,
             skill_hash,
             confidence,
             route_name,
+            lane: Self::lane_from_result(exec_result, confidence),
             params,
         })
+    }
+
+    fn lane_from_result(exec_result: &ExecutionResult, confidence: f32) -> ActionLane {
+        if let Some(skill) = exec_result.outputs.get("skill_target").and_then(|v| v.as_string()) {
+            if skill == "skill:trade" {
+                return ActionLane::AskApproval;
+            }
+        }
+
+        if let Some(lane) = exec_result.outputs.get("route_lane").and_then(|v| v.as_string()) {
+            return match lane {
+                "execute" => ActionLane::Execute,
+                "clarify" => ActionLane::Clarify,
+                "deny" => ActionLane::Deny,
+                "ask_approval" => ActionLane::AskApproval,
+                "defer" => ActionLane::Defer,
+                _ => ActionLane::Clarify,
+            };
+        }
+
+        if confidence >= 0.85 {
+            ActionLane::Execute
+        } else if confidence >= 0.65 {
+            ActionLane::AskApproval
+        } else if confidence >= 0.45 {
+            ActionLane::Clarify
+        } else if confidence >= 0.25 {
+            ActionLane::Defer
+        } else {
+            ActionLane::Deny
+        }
     }
 
     /// Generate a cache key for a message.

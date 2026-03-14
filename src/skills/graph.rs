@@ -1,11 +1,11 @@
 //! Skill Graph - the core data structure for skills.
 //!
 //! A SkillGraph represents a directed acyclic graph (DAG) of operations
-//! that define skill behavior. This is a placeholder implementation
-//! that will be replaced with zerolang::RuntimeGraph when 0-lang is available.
+//! that define skill behavior and can be compiled into runtime graphs.
 
 use serde::{Serialize, Deserialize};
 use crate::types::ContentHash;
+use crate::error::SkillError;
 
 /// A node in the skill graph.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -195,6 +195,126 @@ impl SkillGraph {
     /// Deserialize from bytes.
     pub fn deserialize(data: &[u8]) -> Result<Self, serde_json::Error> {
         serde_json::from_slice(data)
+    }
+
+    /// Compile skill graph into runtime graph for direct execution.
+    pub fn to_runtime_graph(&self) -> Result<crate::runtime::Graph, SkillError> {
+        use crate::runtime::types::{Graph, GraphNode, NodeType};
+
+        let mut nodes = Vec::with_capacity(self.nodes.len());
+        for node in &self.nodes {
+            match node {
+                SkillNode::Input { name, .. } => nodes.push(GraphNode {
+                    id: name.clone(),
+                    node_type: NodeType::External {
+                        uri: format!("input://{}", name),
+                    },
+                    inputs: Vec::new(),
+                    params: serde_json::json!({}),
+                }),
+                SkillNode::Operation { id, op, inputs } => {
+                    nodes.push(GraphNode {
+                        id: id.clone(),
+                        node_type: NodeType::Operation {
+                            op: op.runtime_name()?.to_string(),
+                        },
+                        inputs: inputs.clone(),
+                        params: op.runtime_params(),
+                    });
+                }
+                SkillNode::External { id, uri, inputs } => nodes.push(GraphNode {
+                    id: id.clone(),
+                    node_type: NodeType::External { uri: uri.clone() },
+                    inputs: inputs.clone(),
+                    params: serde_json::json!({}),
+                }),
+                SkillNode::Constant { id, value } => nodes.push(GraphNode {
+                    id: id.clone(),
+                    node_type: NodeType::Constant {
+                        value: json_to_runtime_value(value),
+                    },
+                    inputs: Vec::new(),
+                    params: serde_json::json!({}),
+                }),
+            }
+        }
+
+        Ok(Graph {
+            name: self.name.clone(),
+            version: self.version.parse::<u32>().unwrap_or(1),
+            description: self.description.clone().unwrap_or_default(),
+            nodes,
+            outputs: self.outputs.clone(),
+            entry_point: self.entry_point.clone().unwrap_or_else(|| {
+                self.nodes.first().map(|n| n.id().to_string()).unwrap_or_default()
+            }),
+            metadata: serde_json::json!({
+                "skill_name": self.name,
+                "permissions": self.permissions,
+                "proof_count": self.proofs.len(),
+            }),
+        })
+    }
+}
+
+impl Op {
+    pub fn runtime_name(&self) -> Result<&'static str, SkillError> {
+        let name = match self {
+            Op::Identity => "Identity",
+            Op::StringFormat { .. } => "Concat",
+            Op::StringConcat => "Concat",
+            Op::JsonParse => "Identity",
+            Op::JsonGet { .. } => "GetField",
+            Op::JsonStringify => "Identity",
+            Op::Conditional => "If",
+            Op::HttpGet => "Identity",
+            Op::HttpPost => "Identity",
+            Op::Wait { .. } => "Identity",
+            Op::Log { .. } => "Identity",
+            Op::Map { .. } | Op::Filter { .. } | Op::Reduce { .. } => {
+                return Err(SkillError::InvalidGraph(
+                    "Nested skill graph ops are not runtime-compatible yet".to_string(),
+                ));
+            }
+        };
+        Ok(name)
+    }
+
+    pub fn runtime_params(&self) -> serde_json::Value {
+        match self {
+            Op::StringFormat { template } => serde_json::json!({ "separator": "", "template": template }),
+            Op::JsonGet { path } => serde_json::json!({ "field": path }),
+            Op::Wait { ms } => serde_json::json!({ "wait_ms": ms }),
+            Op::Log { level } => serde_json::json!({ "level": level }),
+            _ => serde_json::json!({}),
+        }
+    }
+}
+
+fn json_to_runtime_value(value: &serde_json::Value) -> crate::runtime::Value {
+    use crate::runtime::Value;
+
+    match value {
+        serde_json::Value::Null => Value::Null,
+        serde_json::Value::Bool(v) => Value::Bool(*v),
+        serde_json::Value::Number(v) => {
+            if let Some(i) = v.as_i64() {
+                Value::Int(i)
+            } else if let Some(f) = v.as_f64() {
+                Value::Float(f)
+            } else {
+                Value::Null
+            }
+        }
+        serde_json::Value::String(v) => Value::String(v.clone()),
+        serde_json::Value::Array(v) => Value::Array(v.iter().map(json_to_runtime_value).collect()),
+        serde_json::Value::Object(v) => {
+            let mut map = std::collections::HashMap::new();
+            for (k, val) in v {
+                map.insert(k.clone(), json_to_runtime_value(val));
+            }
+            Value::Map(map)
+        }
     }
 }
 

@@ -302,7 +302,7 @@ impl SessionManager {
     }
 
     /// Update a session after an action.
-    pub fn update(
+    pub async fn update(
         &mut self,
         session_id: &ContentHash,
         action: &ProofCarryingAction,
@@ -315,7 +315,7 @@ impl SessionManager {
         };
         
         // Calculate new trust score using graph
-        let new_trust = self.calculate_trust(current_trust, action.confidence);
+        let new_trust = self.calculate_trust(current_trust, action.confidence).await;
         
         // Now update the session
         let session = self.sessions.get_mut(session_id)
@@ -337,25 +337,14 @@ impl SessionManager {
     }
 
     /// Calculate new trust score using the 0-lang graph.
-    fn calculate_trust(&self, current: Confidence, action_confidence: Confidence) -> Confidence {
+    async fn calculate_trust(&self, current: Confidence, action_confidence: Confidence) -> Confidence {
         // If we have a graph, use it
         if let Some(graph) = &self.session_graph {
             let mut inputs = HashMap::new();
             inputs.insert("current_trust".to_string(), Value::Float(current.value() as f64));
             inputs.insert("action_confidence".to_string(), Value::Float(action_confidence.value() as f64));
             
-            // Use tokio runtime for async execution
-            let interpreter = self.interpreter.clone();
-            let graph = graph.clone();
-            
-            let result = std::thread::spawn(move || {
-                let rt = tokio::runtime::Runtime::new().unwrap();
-                rt.block_on(async {
-                    interpreter.execute(&graph, inputs).await
-                })
-            }).join();
-            
-            if let Ok(Ok(exec_result)) = result {
+            if let Ok(exec_result) = self.interpreter.execute(graph, inputs).await {
                 if let Some(Value::Float(new_trust)) = exec_result.outputs.get("new_trust") {
                     return Confidence::new(*new_trust as f32);
                 }
@@ -492,14 +481,14 @@ mod tests {
         assert_ne!(id1, session3.id); // Different channel, different session
     }
 
-    #[test]
-    fn test_session_update() {
+    #[tokio::test]
+    async fn test_session_update() {
         let mut manager = SessionManager::new();
         let session = manager.get_or_create("test", "user").unwrap();
         let session_id = session.id;
 
         let pca = ProofCarryingAction::pending();
-        manager.update(&session_id, &pca).unwrap();
+        manager.update(&session_id, &pca).await.unwrap();
 
         let session = manager.get(&session_id).unwrap();
         assert_eq!(session.history.len(), 1);
@@ -516,12 +505,12 @@ mod tests {
         assert!(updated.value() < 0.9);
     }
     
-    #[test]
-    fn test_graph_based_trust_update() {
+    #[tokio::test]
+    async fn test_graph_based_trust_update() {
         let manager = SessionManager::new();
         let current = Confidence::new(0.5);
         let action = Confidence::new(0.9);
-        let updated = manager.calculate_trust(current, action);
+        let updated = manager.calculate_trust(current, action).await;
         
         // Should move toward action confidence using graph
         assert!(updated.value() > 0.5);

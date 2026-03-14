@@ -56,6 +56,9 @@ impl SkillLoader {
             _ => self.parse_auto(&content)?,
         };
         
+        // Always enforce runtime compatibility before installation.
+        graph.to_runtime_graph()?;
+
         // Verify if enabled
         if self.verify_on_load {
             let result = SkillVerifier::verify(&graph)?;
@@ -95,6 +98,9 @@ impl SkillLoader {
         // Parse content
         let graph = self.parse_auto(&content)?;
         
+        // Verify runtime compatibility.
+        graph.to_runtime_graph()?;
+
         // Verify
         if self.verify_on_load {
             let result = SkillVerifier::verify(&graph)?;
@@ -249,9 +255,8 @@ impl SkillLoader {
             
             // Parse node definitions
             if line.starts_with('{') && current_section == "nodes" {
-                if let Some(node) = self.parse_node_definition(line) {
-                    nodes.push(node);
-                }
+                let node = self.parse_node_definition(line)?;
+                nodes.push(node);
             }
         }
         
@@ -268,7 +273,7 @@ impl SkillLoader {
     }
 
     /// Parse a single node definition.
-    fn parse_node_definition(&self, line: &str) -> Option<SkillNode> {
+    fn parse_node_definition(&self, line: &str) -> Result<SkillNode, SkillError> {
         use super::graph::Op;
         
         // Extract key-value pairs from the node definition
@@ -310,7 +315,7 @@ impl SkillLoader {
         
         // Create node based on type
         match node_type.as_str() {
-            "External" => Some(SkillNode::External { id, uri, inputs }),
+            "External" => Ok(SkillNode::External { id, uri, inputs }),
             "Operation" => {
                 let operation = match op.as_str() {
                     "Identity" => Op::Identity,
@@ -321,15 +326,23 @@ impl SkillLoader {
                     "JsonStringify" => Op::JsonStringify,
                     "HttpGet" => Op::HttpGet,
                     "HttpPost" => Op::HttpPost,
-                    _ => Op::Identity,
+                    unknown => {
+                        return Err(SkillError::InvalidGraph(format!(
+                            "Unknown operation '{}' in skill node '{}'",
+                            unknown, id
+                        )));
+                    }
                 };
-                Some(SkillNode::Operation { id, op: operation, inputs })
+                Ok(SkillNode::Operation { id, op: operation, inputs })
             }
-            "Input" => Some(SkillNode::Input { 
+            "Input" => Ok(SkillNode::Input { 
                 name: id, 
                 tensor_type: "string".to_string() 
             }),
-            _ => None,
+            other => Err(SkillError::InvalidGraph(format!(
+                "Unknown node type '{}'",
+                other
+            ))),
         }
     }
 

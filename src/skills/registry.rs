@@ -168,8 +168,12 @@ impl SkillRegistry {
         // Load calendar skill
         let calendar = builtin::create_calendar_skill();
         self.install_graph("calendar", calendar, true)?;
+
+        // Load simulation-first trade skill
+        let trade = builtin::create_trade_skill();
+        self.install_graph("trade", trade, true)?;
         
-        tracing::info!("Loaded {} built-in skills", 4);
+        tracing::info!("Loaded {} built-in skills", 5);
         Ok(())
     }
 
@@ -195,6 +199,9 @@ impl SkillRegistry {
             tracing::debug!("Skill '{}' already installed with hash {:?}", name, hash);
             return Ok(hash);
         }
+
+        // Hard gate: installed skills must compile to runtime graph.
+        graph.to_runtime_graph()?;
         
         // Verify skill unless it's built-in
         let verified = if builtin {

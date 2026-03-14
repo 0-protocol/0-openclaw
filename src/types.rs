@@ -252,6 +252,43 @@ impl Action {
     }
 }
 
+/// Confidence-driven routing lanes used by gateway execution policy.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub enum ActionLane {
+    Execute,
+    Clarify,
+    Deny,
+    AskApproval,
+    Defer,
+}
+
+impl ActionLane {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            ActionLane::Execute => "execute",
+            ActionLane::Clarify => "clarify",
+            ActionLane::Deny => "deny",
+            ActionLane::AskApproval => "ask_approval",
+            ActionLane::Defer => "defer",
+        }
+    }
+}
+
+/// Evidence emitted by side effects after a decision was made.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EffectReceipt {
+    /// Semantic kind of side effect: `message_sent`, `tool_call`, `tx`.
+    pub kind: String,
+    /// Channel/tool/target identifier associated with the effect.
+    pub target: String,
+    /// Content-addressed receipt identifier.
+    pub receipt_id: ContentHash,
+    /// Opaque details for verifiers.
+    pub details: serde_json::Value,
+    /// Unix timestamp in milliseconds.
+    pub timestamp: u64,
+}
+
 /// Proof-Carrying Action - the core innovation of 0-openclaw.
 ///
 /// Every action includes cryptographic proof of the decision path,
@@ -267,8 +304,11 @@ pub struct ProofCarryingAction {
     /// Hash of the input that triggered this action.
     pub input_hash: ContentHash,
     
-    /// Hashes of all graph nodes evaluated (execution trace).
-    pub execution_trace: Vec<ContentHash>,
+    /// Decision trace hashes (routing + skill decision graph execution).
+    pub decision_trace: Vec<ContentHash>,
+    
+    /// Effect trace receipts produced by side effects.
+    pub effect_trace: Vec<EffectReceipt>,
     
     /// Confidence score for this action.
     pub confidence: Confidence,
@@ -314,16 +354,22 @@ impl ProofCarryingAction {
             action: Action::NoOp { reason: "pending".to_string() },
             session_hash: ContentHash::zero(),
             input_hash: ContentHash::zero(),
-            execution_trace: Vec::new(),
+            decision_trace: Vec::new(),
+            effect_trace: Vec::new(),
             confidence: Confidence::none(),
             signature: [0u8; 64],
             timestamp: chrono::Utc::now().timestamp_millis() as u64,
         }
     }
 
-    /// Get the number of nodes in the execution trace.
-    pub fn trace_length(&self) -> usize {
-        self.execution_trace.len()
+    /// Get the number of nodes in the decision trace.
+    pub fn decision_trace_length(&self) -> usize {
+        self.decision_trace.len()
+    }
+
+    /// Get the number of side-effect receipts.
+    pub fn effect_count(&self) -> usize {
+        self.effect_trace.len()
     }
 
     /// Check if the PCA has been signed.
@@ -336,10 +382,11 @@ impl fmt::Display for ProofCarryingAction {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
             f,
-            "PCA[{}] conf={} trace={} signed={}",
+            "PCA[{}] conf={} decision_trace={} effects={} signed={}",
             self.action.action_type(),
             self.confidence,
-            self.trace_length(),
+            self.decision_trace_length(),
+            self.effect_count(),
             self.is_signed()
         )
     }
